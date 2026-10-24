@@ -39,9 +39,11 @@
 //! ```
 
 pub mod disk;
+pub mod huge;
 pub mod plugin;
 pub mod salvager;
 pub mod stream;
+pub mod sysmem;
 pub mod validate;
 pub mod zombie_lzma;
 
@@ -60,3 +62,6 @@ pub use validate::{
 pub use zombie_lzma::{
     classify_entropy, shannon_entropy, EntropyClass, TaintMap, ZombieLzmaDecoder, ZombieStats,
 };
+
+pub use huge::{huge_salvage, HugeConfig, HugeError, HugeProgress, HugeReport};
+pub use sysmem::{fmt_bytes, parse_size, Governor, MemMonitor, MemSnapshot, Pressure};

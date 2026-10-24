@@ -139,6 +139,32 @@ docker run -p 5001:5001 -v ./archives:/data helix-salvager
 docker run -v ./:/data helix-salvager salvager recover /data/broken.zip -o /data/recovered/
 ```
 
+## Huge archives (bigger than RAM + swap)
+
+`salvager huge` recovers from inputs of any size using **bounded memory**. `salvager recover` switches to it automatically when the file is large compared to free RAM.
+
+```bash
+salvager huge giant.zip -o ./out                 # auto memory budget (half of free RAM)
+salvager huge giant.img -o ./out --max-mem 2G    # lower the cap
+salvager huge giant.zip -o ./out --resume        # continue after a stop / crash
+salvager huge giant.bin -o ./out --carve         # force signature carving
+```
+
+How it stays inside memory:
+
+- **Reads through a fixed buffer** (no `mmap`, nothing is charged to the pagefile).
+- **Writes every file to disk as soon as it is complete**; files too big for RAM are spilled to disk while still being carved, hashed incrementally, and trimmed at their end marker (JPEG/PNG/PDF).
+- **Watches the machine while running**: free RAM, free swap/pagefile, container (cgroup) limits, and its *own* resident memory. Buffers shrink under pressure and grow back; under critical pressure it checkpoints, waits, and stops cleanly if memory does not recover.
+- **Checks free disk space** and stops with a checkpoint instead of filling the drive (`--disk-reserve`, default 512M).
+- **Checkpoint / resume**: progress is saved atomically to `<out>/.helix-state/`. Stopped runs (Ctrl-C, `kill`, power loss, low memory, full disk) continue with `--resume`.
+- **Unreadable sectors** in raw images are skipped (64 KiB at a time) rather than aborting.
+
+Auto-detected strategies: ZIP with readable directory (entry-by-entry), **ZIP with damaged/missing directory** (local-header scan; truncated entries keep their recovered prefix), tar, gzip / bzip2 / xz (streamed, then tar extraction or carving), everything else (7z, RAR, disk images, raw blobs) via the streaming signature carver.
+
+Output: `files/` (named entries, path-sanitised), `carved/NNNN/` (carved files), and `manifest.jsonl` (one JSON line per file: path, offset, size, SHA-256, confidence, status).
+
+Limits: 7z/RAR are carved rather than structurally decoded in this mode; encrypted ZIP entries are skipped; resuming a compressed stream re-decompresses up to the checkpoint (memory stays bounded, time does not).
+
 ## How It Works
 
 ### Engine A — Fail-Forward Extraction

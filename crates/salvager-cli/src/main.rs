@@ -107,6 +107,40 @@ enum Commands {
         json: bool,
     },
 
+    /// Recover from archives far larger than RAM + swap (bounded memory, resumable)
+    Huge {
+        /// Path to the huge / corrupt archive or disk image
+        input: PathBuf,
+
+        /// Output directory (recovered files + manifest.jsonl)
+        #[arg(short, long, default_value = "salvaged_output")]
+        output: PathBuf,
+
+        /// Cap on working memory, e.g. 2G, 512M (default: half of free RAM)
+        #[arg(long)]
+        max_mem: Option<String>,
+
+        /// Continue a previous run in the same output directory
+        #[arg(long)]
+        resume: bool,
+
+        /// Always use the signature carver (skip ZIP/tar/gzip structure)
+        #[arg(long)]
+        carve: bool,
+
+        /// Stop with a checkpoint when free disk space falls below this (default 512M)
+        #[arg(long)]
+        disk_reserve: Option<String>,
+
+        /// Seconds between checkpoint saves (default 10)
+        #[arg(long)]
+        checkpoint_secs: Option<u64>,
+
+        /// Output JSON report
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Load plugin signatures and recover with custom file types
     Plugin {
         /// Path to the plugin JSON configuration file
@@ -156,6 +190,16 @@ fn main() {
             window_mb,
             json,
         } => cmd_stream(input, output, window_mb, json),
+        Commands::Huge {
+            input,
+            output,
+            max_mem,
+            resume,
+            carve,
+            disk_reserve,
+            checkpoint_secs,
+            json,
+        } => cmd_huge(input, output, max_mem, resume, carve, disk_reserve, checkpoint_secs, json),
         Commands::Plugin {
             config,
             input,
@@ -173,6 +217,24 @@ fn main() {
 fn cmd_recover(input: PathBuf, output: PathBuf, as_zip: bool, json: bool, quiet: bool) {
     if !quiet && !json {
         print_banner();
+    }
+
+    // Auto-switch to bounded-memory mode when the file will not comfortably fit in RAM.
+    if let Ok(md) = std::fs::metadata(&input) {
+        let avail = salvager_core::MemMonitor::new().sample().available_ram;
+        if md.len() > avail / 4 {
+            eprintln!(
+                "{}  {} is large vs. free RAM ({} free) — using bounded-memory mode (see `salvager huge --help`)",
+                "▸".yellow().bold(),
+                salvager_core::fmt_bytes(md.len()),
+                salvager_core::fmt_bytes(avail)
+            );
+            if as_zip {
+                eprintln!("   (--zip is not supported in this mode; writing a directory)");
+            }
+            cmd_huge(input, output, None, false, false, None, None, json);
+            return;
+        }
     }
 
     // Read input file
@@ -978,5 +1040,159 @@ fn format_confidence(confidence: f64) -> colored::ColoredString {
         label.yellow()
     } else {
         label.red()
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+//  HUGE (bounded memory, resumable)
+// ═══════════════════════════════════════════════════════
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_huge(
+    input: PathBuf,
+    output: PathBuf,
+    max_mem: Option<String>,
+    resume: bool,
+    carve: bool,
+    disk_reserve: Option<String>,
+    checkpoint_secs: Option<u64>,
+    json: bool,
+) {
+    use salvager_core::{fmt_bytes, parse_size, HugeConfig, HugeError, HugeProgress, Pressure};
+
+    let mut cfg = HugeConfig {
+        resume,
+        force_carve: carve,
+        ..Default::default()
+    };
+    if let Some(c) = checkpoint_secs {
+        cfg.checkpoint_secs = c;
+    }
+    for (label, val, slot) in [("--max-mem", &max_mem, 0), ("--disk-reserve", &disk_reserve, 1)] {
+        if let Some(v) = val {
+            match parse_size(v) {
+                Some(n) if slot == 0 => cfg.mem_limit = Some(n),
+                Some(n) => cfg.disk_reserve = n,
+                None => {
+                    eprintln!("{} cannot parse {} value '{}'", "ERROR".red().bold(), label, v);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    if !json {
+        print_banner();
+        let s = salvager_core::MemMonitor::new().sample();
+        eprintln!(
+            "{}  Input  : {}",
+            "▸".cyan().bold(),
+            input.display().to_string().white().bold()
+        );
+        eprintln!(
+            "{}  Memory : {} free of {} RAM, {} free swap/pagefile{}",
+            "▸".cyan().bold(),
+            fmt_bytes(s.available_ram),
+            fmt_bytes(s.total_ram),
+            fmt_bytes(s.free_swap),
+            if resume { "  [resuming]" } else { "" }
+        );
+    }
+
+    let engine = SalvageEngine::new();
+    let last_note = std::cell::RefCell::new(String::new());
+    let cb = |p: &HugeProgress| {
+        if json {
+            return;
+        }
+        if let Some(n) = &p.note {
+            if *last_note.borrow() != *n {
+                eprintln!("\r\x1b[K{}  {}", "!".yellow().bold(), n);
+                *last_note.borrow_mut() = n.clone();
+            }
+        }
+        let pct = if p.total > 0 { (p.position as f64 / p.total as f64 * 100.0).min(100.0) } else { 0.0 };
+        let flag = match p.pressure {
+            Pressure::Ok => "",
+            Pressure::Low => " [low mem: buffers shrunk]",
+            Pressure::Critical => " [CRITICAL]",
+        };
+        eprint!(
+            "\r\x1b[K  {:5.1}%  {} files  {} out | buf {} (budget {}) | free RAM {} | self {}{}",
+            pct,
+            p.files,
+            fmt_bytes(p.bytes_out),
+            fmt_bytes(p.buffer as u64),
+            fmt_bytes(p.budget),
+            fmt_bytes(p.mem.available_ram),
+            fmt_bytes(p.mem.self_rss),
+            flag
+        );
+    };
+
+    let started = Instant::now();
+    let res = salvager_core::huge_salvage(&input, &output, &engine, &cfg, Some(&cb));
+    if !json {
+        eprintln!();
+    }
+    match res {
+        Ok(r) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&r).unwrap());
+            } else {
+                eprintln!();
+                eprintln!("{}", "─── Huge-file Report ───".cyan().bold());
+                eprintln!("  Mode            : {}", r.mode);
+                eprintln!("  Input size      : {}", fmt_bytes(r.input_size));
+                eprintln!("  Files recovered : {}", format!("{}", r.files_recovered).green().bold());
+                eprintln!("  Bytes recovered : {}", fmt_bytes(r.bytes_recovered));
+                eprintln!("  Duplicates      : {}", r.duplicates_skipped);
+                eprintln!("  Partial files   : {}", r.partial_files);
+                if r.unsupported_entries > 0 {
+                    eprintln!("  Unsupported     : {}", r.unsupported_entries);
+                }
+                if r.unreadable_regions > 0 {
+                    eprintln!(
+                        "  Unreadable      : {} region(s), {} skipped",
+                        r.unreadable_regions,
+                        fmt_bytes(r.unreadable_bytes)
+                    );
+                }
+                eprintln!(
+                    "  Memory          : budget {}, buffer {} (min used {}, {} shrink(s))",
+                    fmt_bytes(r.memory_budget),
+                    fmt_bytes(r.buffer_max as u64),
+                    fmt_bytes(r.buffer_min_used as u64),
+                    r.buffer_shrinks
+                );
+                if r.dedup_table_full {
+                    eprintln!("  {} dedup table filled — later duplicates may be kept", "note:".yellow());
+                }
+                for n in &r.notes {
+                    eprintln!("  {} {}", "note:".yellow(), n);
+                }
+                eprintln!("  Time            : {:.1}s", started.elapsed().as_secs_f64());
+                eprintln!("{}  Output   → {}", "▸".green().bold(), r.output_dir);
+                eprintln!("{}  Manifest → {}", "▸".green().bold(), r.manifest);
+                eprintln!();
+            }
+            if r.files_recovered == 0 {
+                std::process::exit(2);
+            }
+        }
+        Err(e) => {
+            eprintln!("{} {}", "STOPPED".red().bold(), e);
+            let code = match e {
+                HugeError::DiskLow { .. } | HugeError::MemoryPressure => {
+                    eprintln!(
+                        "   Resume with: salvager huge {:?} -o {:?} --resume",
+                        input, output
+                    );
+                    3
+                }
+                _ => 1,
+            };
+            std::process::exit(code);
+        }
     }
 }

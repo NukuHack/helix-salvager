@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `salvager huge`: bounded-memory, resumable recovery for inputs larger than RAM + swap (`huge` / `sysmem` modules in `salvager-core`).
+- Memory/disk governor (free RAM, swap, cgroup limits, own RSS, free disk).
+- `recover` auto-switches to huge mode for large inputs.
+- ZIP local-header recovery for archives with a damaged or missing central directory.
+
 ## [1.0.0] — 2026-03-08
 
 ### Added

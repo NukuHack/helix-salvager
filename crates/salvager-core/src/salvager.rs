@@ -1106,15 +1106,17 @@ impl SalvageEngine {
     //  COMPONENT B: Magic Header Carver (Aho-Corasick)
     // ──────────────────────────────────────────────────────────
 
-    fn carve_raw(&self, data: &[u8], progress_cb: ProgressCb<'_>) -> Vec<SalvagedFile> {
-        if data.is_empty() {
-            return Vec::new();
-        }
-
-        if let Some(cb) = progress_cb {
-            cb("Scanning for magic headers (Aho-Corasick)...", 65);
-        }
-
+    /// Find all built-in magic-signature hits in `data`, with the same
+    /// adjustment / validation rules the raw carver uses.
+    ///
+    /// `extra_tail` is the number of bytes that exist *after* `data` in the
+    /// real input (streaming mode), so size-based plausibility checks do not
+    /// reject large files whose tail has not been read yet.
+    pub(crate) fn collect_hits(
+        &self,
+        data: &[u8],
+        extra_tail: usize,
+    ) -> Vec<(usize, CarvedFileType)> {
         // Find all magic signature matches.
         let mut hits: Vec<(usize, CarvedFileType)> = Vec::new();
         for mat in self.magic_matcher.find_iter(data) {
@@ -1147,6 +1149,58 @@ impl SalvageEngine {
         // Sort by offset.
         hits.sort_by_key(|(off, _)| *off);
 
+        // Post-validate BMP hits: require a plausible LE file-size in bytes 2–5.
+        // Post-validate ICO hits: require image count > 0 and <= 256.
+        // Post-validate MP3 frame sync: filter out short false positives.
+        hits.retain(|&(off, ft)| {
+            if ft == CarvedFileType::Bmp {
+                let s = &data[off..];
+                if s.len() >= 6 {
+                    let sz = u32::from_le_bytes([s[2], s[3], s[4], s[5]]);
+                    sz >= 14 && (sz as usize) <= s.len().saturating_add(extra_tail).saturating_add(1024)
+                } else {
+                    false
+                }
+            } else if ft == CarvedFileType::Ico {
+                // ICO: 00 00 01 00 is very generic — require header (6) + at least
+                // one 16-byte directory entry, with the entry's reserved byte == 0
+                // and a plausible data-offset pointing inside remaining data.
+                let s = &data[off..];
+                if s.len() >= 22 {
+                    let s_len = s.len().saturating_add(extra_tail);
+                    let img_count = u16::from_le_bytes([s[4], s[5]]);
+                    let reserved_byte = s[9]; // first entry, reserved field
+                    let data_offset = u32::from_le_bytes([s[18], s[19], s[20], s[21]]) as usize;
+                    let min_header = 6 + 16 * (img_count as usize);
+                    img_count > 0
+                        && img_count <= 256
+                        && reserved_byte == 0
+                        && data_offset >= min_header
+                        && data_offset < s_len
+                } else {
+                    false
+                }
+            } else if ft == CarvedFileType::Mp3 && (data[off] == 0xFF) {
+                // MP3 frame sync — require at least 128 bytes following
+                data.len() - off + extra_tail >= 128
+            } else {
+                true
+            }
+        });
+        hits
+    }
+
+    fn carve_raw(&self, data: &[u8], progress_cb: ProgressCb<'_>) -> Vec<SalvagedFile> {
+        if data.is_empty() {
+            return Vec::new();
+        }
+
+        if let Some(cb) = progress_cb {
+            cb("Scanning for magic headers (Aho-Corasick)...", 65);
+        }
+
+        let hits = self.collect_hits(data, 0);
+
         // Also scan with plugin signatures if loaded.
         let mut plugin_hits: Vec<(usize, usize)> = Vec::new(); // (offset, plugin_index)
         if let Some(ref pm) = self.plugin_matcher {
@@ -1162,44 +1216,6 @@ impl SalvageEngine {
         }
         plugin_hits.sort_by_key(|(off, _)| *off);
         plugin_hits.dedup_by_key(|(off, _)| *off);
-
-        // Post-validate BMP hits: require a plausible LE file-size in bytes 2–5.
-        // Post-validate ICO hits: require image count > 0 and <= 256.
-        // Post-validate MP3 frame sync: filter out short false positives.
-        hits.retain(|&(off, ft)| {
-            if ft == CarvedFileType::Bmp {
-                let s = &data[off..];
-                if s.len() >= 6 {
-                    let sz = u32::from_le_bytes([s[2], s[3], s[4], s[5]]);
-                    sz >= 14 && (sz as usize) <= s.len() + 1024
-                } else {
-                    false
-                }
-            } else if ft == CarvedFileType::Ico {
-                // ICO: 00 00 01 00 is very generic — require header (6) + at least
-                // one 16-byte directory entry, with the entry's reserved byte == 0
-                // and a plausible data-offset pointing inside remaining data.
-                let s = &data[off..];
-                if s.len() >= 22 {
-                    let img_count = u16::from_le_bytes([s[4], s[5]]);
-                    let reserved_byte = s[9]; // first entry, reserved field
-                    let data_offset = u32::from_le_bytes([s[18], s[19], s[20], s[21]]) as usize;
-                    let min_header = 6 + 16 * (img_count as usize);
-                    img_count > 0
-                        && img_count <= 256
-                        && reserved_byte == 0
-                        && data_offset >= min_header
-                        && data_offset < s.len()
-                } else {
-                    false
-                }
-            } else if ft == CarvedFileType::Mp3 && (data[off] == 0xFF) {
-                // MP3 frame sync — require at least 128 bytes following
-                data.len() - off >= 128
-            } else {
-                true
-            }
-        });
 
         if let Some(cb) = progress_cb {
             cb(
@@ -1308,7 +1324,7 @@ impl SalvageEngine {
     }
 
     /// Try to find the true end of a carved file by looking for end markers.
-    fn refine_file_end<'a>(&self, data: &'a [u8], ft: CarvedFileType) -> &'a [u8] {
+    pub(crate) fn refine_file_end<'a>(&self, data: &'a [u8], ft: CarvedFileType) -> &'a [u8] {
         match ft {
             CarvedFileType::Jpeg => {
                 // JPEG ends with FF D9
@@ -1471,7 +1487,7 @@ impl SalvageEngine {
                 total_bytes,
             })
             .collect();
-        breakdown.sort_by(|a, b| b.count.cmp(&a.count));
+        breakdown.sort_by_key(|a| std::cmp::Reverse(a.count));
         breakdown
     }
 
