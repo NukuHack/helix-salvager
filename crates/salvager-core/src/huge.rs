@@ -130,7 +130,10 @@ pub enum HugeError {
     /// or the checkpoint does not match the input.
     Checkpoint(String),
     /// Free disk space fell below the reserve. A checkpoint was saved.
-    DiskLow { free: u64, reserve: u64 },
+    DiskLow {
+        free: u64,
+        reserve: u64,
+    },
     /// Memory stayed critically low. A checkpoint was saved.
     MemoryPressure,
 }
@@ -378,7 +381,13 @@ impl<'a> Run<'a> {
         format!("carved/{:04}/{:08}.{}", idx / 10_000, idx, ext)
     }
 
-    fn emit_carved_mem(&mut self, offset: u64, ft: CarvedFileType, data: &[u8], conf: f64) -> io::Result<()> {
+    fn emit_carved_mem(
+        &mut self,
+        offset: u64,
+        ft: CarvedFileType,
+        data: &[u8],
+        conf: f64,
+    ) -> io::Result<()> {
         let mut f = SalvagedFile {
             index: 0,
             name: String::new(),
@@ -502,7 +511,8 @@ impl<'a> Run<'a> {
                     f.set_len(size)?;
                     drop(f);
                     let mut h = Sha256::new();
-                    let mut r = BufReader::with_capacity(MIB as usize, File::open(self.spill_path())?);
+                    let mut r =
+                        BufReader::with_capacity(MIB as usize, File::open(self.spill_path())?);
                     let mut chunk = vec![0u8; MIB as usize];
                     loop {
                         let n = r.read(&mut chunk)?;
@@ -521,7 +531,11 @@ impl<'a> Run<'a> {
             if trimmed.len() < self.cfg.min_file_size {
                 return Ok(());
             }
-            let conf = if trimmed.len() < data.len() { 0.70 } else { 0.55 };
+            let conf = if trimmed.len() < data.len() {
+                0.70
+            } else {
+                0.55
+            };
             self.emit_carved_mem(o.start, o.ft, trimmed, conf)?;
         }
         Ok(())
@@ -531,7 +545,12 @@ impl<'a> Run<'a> {
 
     /// Carve signatures out of `reader`, whose first byte is at global offset
     /// `start`. `total` is the number of bytes in the stream if known.
-    fn carve<R: Read>(&mut self, reader: &mut R, start: u64, total: Option<u64>) -> HResult<CarveEnd> {
+    fn carve<R: Read>(
+        &mut self,
+        reader: &mut R,
+        start: u64,
+        total: Option<u64>,
+    ) -> HResult<CarveEnd> {
         let mut base = start;
         let mut accepted_upto = start;
         let mut buf: Vec<u8> = vec![0u8; self.gov.cur_buf + 2 * KEEP];
@@ -644,8 +663,14 @@ impl<'a> Run<'a> {
         let mut abs = self.out.join("files").join(&rel);
         // Avoid clobbering a different entry with the same name.
         if abs.exists() {
-            let stem = abs.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-            let ext = abs.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default();
+            let stem = abs
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let ext = abs
+                .extension()
+                .map(|s| format!(".{}", s.to_string_lossy()))
+                .unwrap_or_default();
             let mut n = 1;
             loop {
                 let cand = abs.with_file_name(format!("{}~{}{}", stem, n, ext));
@@ -745,7 +770,12 @@ impl<'a> Run<'a> {
                     let next = (p + SKIP).min(size);
                     self.unreadable_regions += 1;
                     self.unreadable_bytes += next - p;
-                    self.note(format!("unreadable region at {:#x}: {} — skipped {} KiB", p, msg, SKIP / 1024));
+                    self.note(format!(
+                        "unreadable region at {:#x}: {} — skipped {} KiB",
+                        p,
+                        msg,
+                        SKIP / 1024
+                    ));
                     if next >= size {
                         return Ok(());
                     }
@@ -779,7 +809,10 @@ impl<'a> Run<'a> {
             let mut ent = match ent {
                 Ok(e) => e,
                 Err(e) => {
-                    self.note(format!("tar: stopped at entry {}: {} — earlier entries were recovered", i, e));
+                    self.note(format!(
+                        "tar: stopped at entry {}: {} — earlier entries were recovered",
+                        i, e
+                    ));
                     break;
                 }
             };
@@ -789,7 +822,10 @@ impl<'a> Run<'a> {
             self.check_disk(false)?;
             let is_file = ent.header().entry_type().is_file();
             if is_file {
-                let name = ent.path().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+                let name = ent
+                    .path()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 let expected = ent.header().size().unwrap_or(0);
                 let out = self.copy_entry(&name, &mut ent)?;
                 let (status, conf) = if out.err.is_some() || out.bytes < expected {
@@ -892,7 +928,10 @@ impl<'a> Run<'a> {
                 continue;
             }
 
-            let mut cnt = Counting { inner: &mut br, n: 0 };
+            let mut cnt = Counting {
+                inner: &mut br,
+                n: 0,
+            };
             // (crc from descriptor, bytes after data to skip, ended-by-header, hit-eof)
             let mut special: Option<(Option<u32>, u64, bool, bool)> = None;
             let outcome = match method {
@@ -916,7 +955,12 @@ impl<'a> Run<'a> {
                         Some((c, l)) => (Some(c), l),
                         None => (None, 0),
                     };
-                    special = Some((crc, dr.emitted + dlen, dr.ended_by_header, dr.eof && dr.desc.is_none() && !dr.ended_by_header));
+                    special = Some((
+                        crc,
+                        dr.emitted + dlen,
+                        dr.ended_by_header,
+                        dr.eof && dr.desc.is_none() && !dr.ended_by_header,
+                    ));
                     Some((out, "zip-local-stored-stream"))
                 }
                 _ => None,
@@ -925,7 +969,9 @@ impl<'a> Run<'a> {
             match outcome {
                 None => {
                     self.cp.unsupported += 1;
-                    *skipped.entry(format!("compression method {}", method)).or_insert(0) += 1;
+                    *skipped
+                        .entry(format!("compression method {}", method))
+                        .or_insert(0) += 1;
                     pos = data_start;
                 }
                 Some((out, how)) => {
@@ -935,7 +981,11 @@ impl<'a> Run<'a> {
                         (status, conf) = if out.err.is_some() || hit_eof {
                             ("partial", 0.4)
                         } else if let Some(c) = dcrc {
-                            if c == out.crc { ("ok", 0.95) } else { ("crc_mismatch", 0.6) }
+                            if c == out.crc {
+                                ("ok", 0.95)
+                            } else {
+                                ("crc_mismatch", 0.6)
+                            }
                         } else if by_header {
                             ("unverified", 0.6)
                         } else {
@@ -950,7 +1000,9 @@ impl<'a> Run<'a> {
                                 Ok(b) if b.len() >= 8 && b[..4] == [0x50, 0x4B, 0x07, 0x08] => {
                                     Some(u32::from_le_bytes([b[4], b[5], b[6], b[7]]))
                                 }
-                                Ok(b) if b.len() >= 4 => Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                                Ok(b) if b.len() >= 4 => {
+                                    Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                                }
                                 _ => None,
                             }
                         };
@@ -971,7 +1023,10 @@ impl<'a> Run<'a> {
             }
         }
         for (what, n) in skipped {
-            self.note(format!("{} ZIP entries skipped ({}) — not supported in this mode", n, what));
+            self.note(format!(
+                "{} ZIP entries skipped ({}) — not supported in this mode",
+                n, what
+            ));
         }
         self.position = size;
         Ok(())
@@ -1090,7 +1145,6 @@ impl<R: BufRead> BufRead for Counting<'_, R> {
     }
 }
 
-
 /// Reads a *stored* ZIP entry whose size is not in the local header (streamed
 /// archives such as OneDrive / browser "download as zip" use a trailing data
 /// descriptor). Yields the data and stops at the first of:
@@ -1182,7 +1236,11 @@ impl<'a, R: Read> DescReader<'a, R> {
             }
         }
         self.buf.truncate(len);
-        let limit = if self.eof { len } else { len.saturating_sub(DESC_LOOK) };
+        let limit = if self.eof {
+            len
+        } else {
+            len.saturating_sub(DESC_LOOK)
+        };
         let mut i = self.scan_pos;
         while i < limit {
             let Some(off) = self.buf[i..limit].iter().position(|&b| b == 0x50) else {
@@ -1195,8 +1253,10 @@ impl<'a, R: Read> DescReader<'a, R> {
                     let before = self.emitted + (i - self.start) as u64;
                     if i + 16 <= len {
                         let crc = u32::from_le_bytes([b[i + 4], b[i + 5], b[i + 6], b[i + 7]]);
-                        let cs = u32::from_le_bytes([b[i + 8], b[i + 9], b[i + 10], b[i + 11]]) as u64;
-                        let us = u32::from_le_bytes([b[i + 12], b[i + 13], b[i + 14], b[i + 15]]) as u64;
+                        let cs =
+                            u32::from_le_bytes([b[i + 8], b[i + 9], b[i + 10], b[i + 11]]) as u64;
+                        let us =
+                            u32::from_le_bytes([b[i + 12], b[i + 13], b[i + 14], b[i + 15]]) as u64;
                         if cs == before && us == before {
                             self.desc = Some((crc, 16));
                             self.done = true;
@@ -1221,7 +1281,8 @@ impl<'a, R: Read> DescReader<'a, R> {
                     // Drop a damaged descriptor sitting right before the header.
                     let mut end = i;
                     for dl in [24usize, 16] {
-                        if i >= self.start + dl && b[i - dl..i - dl + 4] == [0x50, 0x4B, 0x07, 0x08] {
+                        if i >= self.start + dl && b[i - dl..i - dl + 4] == [0x50, 0x4B, 0x07, 0x08]
+                        {
                             end = i - dl;
                             break;
                         }
@@ -1290,7 +1351,11 @@ fn find_local_header(file: &mut File, mut pos: u64, size: u64) -> io::Result<Opt
 }
 
 fn sanitize_ext(ext: &str) -> String {
-    let e: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
+    let e: String = ext
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
     if e.is_empty() {
         "bin".into()
     } else {
@@ -1371,9 +1436,17 @@ impl Kind {
         }
     }
     fn parse(s: &str) -> Option<Self> {
-        [Kind::ZipCd, Kind::ZipScan, Kind::Tar, Kind::Gzip, Kind::Bzip2, Kind::Xz, Kind::Carve]
-            .into_iter()
-            .find(|k| k.name() == s)
+        [
+            Kind::ZipCd,
+            Kind::ZipScan,
+            Kind::Tar,
+            Kind::Gzip,
+            Kind::Bzip2,
+            Kind::Xz,
+            Kind::Carve,
+        ]
+        .into_iter()
+        .find(|k| k.name() == s)
     }
 }
 
@@ -1453,14 +1526,17 @@ pub fn huge_salvage(
             )));
         }
         if cp.completed {
-            return Err(HugeError::Checkpoint("that run already finished — nothing to resume".into()));
+            return Err(HugeError::Checkpoint(
+                "that run already finished — nothing to resume".into(),
+            ));
         }
         resume_cp = Some(cp);
     }
 
     let kind = match &resume_cp {
-        Some(cp) => Kind::parse(&cp.mode)
-            .ok_or_else(|| HugeError::Checkpoint(format!("unknown mode '{}' in checkpoint", cp.mode)))?,
+        Some(cp) => Kind::parse(&cp.mode).ok_or_else(|| {
+            HugeError::Checkpoint(format!("unknown mode '{}' in checkpoint", cp.mode))
+        })?,
         None => sniff(&mut file, cfg)?,
     };
 
@@ -1490,7 +1566,10 @@ pub fn huge_salvage(
                     }
                 }
             }
-            OpenOptions::new().write(true).open(&manifest_path)?.set_len(cp.manifest_len)?;
+            OpenOptions::new()
+                .write(true)
+                .open(&manifest_path)?
+                .set_len(cp.manifest_len)?;
         }
         if let Ok(s) = fs::read_to_string(state_dir.join("current_entry")) {
             let _ = fs::remove_file(s.trim());
@@ -1498,7 +1577,10 @@ pub fn huge_salvage(
         }
         let _ = fs::remove_file(state_dir.join("spill.tmp"));
         if dedup_path.exists() {
-            OpenOptions::new().write(true).open(&dedup_path)?.set_len(cp.dedup_len)?;
+            OpenOptions::new()
+                .write(true)
+                .open(&dedup_path)?
+                .set_len(cp.dedup_len)?;
             let raw = fs::read(&dedup_path)?;
             for c in raw.as_chunks::<16>().0.iter().take(dedup_cap) {
                 dedup_set.insert(u128::from_be_bytes(*c));
@@ -1506,8 +1588,18 @@ pub fn huge_salvage(
         }
     }
 
-    let manifest = BufWriter::new(OpenOptions::new().create(true).append(true).open(&manifest_path)?);
-    let dedup_file = BufWriter::new(OpenOptions::new().create(true).append(true).open(&dedup_path)?);
+    let manifest = BufWriter::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&manifest_path)?,
+    );
+    let dedup_file = BufWriter::new(
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&dedup_path)?,
+    );
 
     let cp0 = resume_cp.clone().unwrap_or_default();
     let mut run = Run {
@@ -1539,7 +1631,13 @@ pub fn huge_salvage(
     };
     run.cp.version = 1;
     run.capture(cp0.resume_offset, cp0.entries_done);
-    let resumed_from = resume_cp.as_ref().map(|c| if c.entries_done > 0 { c.entries_done } else { c.resume_offset });
+    let resumed_from = resume_cp.as_ref().map(|c| {
+        if c.entries_done > 0 {
+            c.entries_done
+        } else {
+            c.resume_offset
+        }
+    });
     run.check_disk(true)?;
     run.save(true, false)?; // checkpoint exists from the very start
 
@@ -1563,7 +1661,10 @@ pub fn huge_salvage(
         }
         Kind::Tar => {
             file.seek(SeekFrom::Start(0))?;
-            run.run_tar(BufReader::with_capacity(MIB as usize, &mut file), skip_entries)?;
+            run.run_tar(
+                BufReader::with_capacity(MIB as usize, &mut file),
+                skip_entries,
+            )?;
         }
         Kind::Carve => {
             run.run_carve_file(&mut file, skip_off)?;
@@ -1637,15 +1738,27 @@ mod tests {
 
     #[test]
     fn sanitize_blocks_traversal() {
-        assert_eq!(sanitize_path("../../etc/passwd", 0), PathBuf::from("etc/passwd"));
-        assert_eq!(sanitize_path("/abs/path.txt", 0), PathBuf::from("abs/path.txt"));
-        assert_eq!(sanitize_path("C:\\Windows\\x.dll", 0), PathBuf::from("C_/Windows/x.dll"));
+        assert_eq!(
+            sanitize_path("../../etc/passwd", 0),
+            PathBuf::from("etc/passwd")
+        );
+        assert_eq!(
+            sanitize_path("/abs/path.txt", 0),
+            PathBuf::from("abs/path.txt")
+        );
+        assert_eq!(
+            sanitize_path("C:\\Windows\\x.dll", 0),
+            PathBuf::from("C_/Windows/x.dll")
+        );
         assert_eq!(sanitize_path("a/./b/../c", 0), PathBuf::from("a/b/c"));
     }
 
     #[test]
     fn sanitize_windows_rules() {
-        assert_eq!(sanitize_path("dir/con.txt", 0), PathBuf::from("dir/_con.txt"));
+        assert_eq!(
+            sanitize_path("dir/con.txt", 0),
+            PathBuf::from("dir/_con.txt")
+        );
         assert_eq!(sanitize_path("a?b*c.txt", 0), PathBuf::from("a_b_c.txt"));
         assert_eq!(sanitize_path("trail. ", 0), PathBuf::from("trail"));
         assert_eq!(sanitize_path("", 7), PathBuf::from("unnamed_7"));

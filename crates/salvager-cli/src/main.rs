@@ -199,7 +199,16 @@ fn main() {
             disk_reserve,
             checkpoint_secs,
             json,
-        } => cmd_huge(input, output, max_mem, resume, carve, disk_reserve, checkpoint_secs, json),
+        } => cmd_huge(
+            input,
+            output,
+            max_mem,
+            resume,
+            carve,
+            disk_reserve,
+            checkpoint_secs,
+            json,
+        ),
         Commands::Plugin {
             config,
             input,
@@ -1068,13 +1077,21 @@ fn cmd_huge(
     if let Some(c) = checkpoint_secs {
         cfg.checkpoint_secs = c;
     }
-    for (label, val, slot) in [("--max-mem", &max_mem, 0), ("--disk-reserve", &disk_reserve, 1)] {
+    for (label, val, slot) in [
+        ("--max-mem", &max_mem, 0),
+        ("--disk-reserve", &disk_reserve, 1),
+    ] {
         if let Some(v) = val {
             match parse_size(v) {
                 Some(n) if slot == 0 => cfg.mem_limit = Some(n),
                 Some(n) => cfg.disk_reserve = n,
                 None => {
-                    eprintln!("{} cannot parse {} value '{}'", "ERROR".red().bold(), label, v);
+                    eprintln!(
+                        "{} cannot parse {} value '{}'",
+                        "ERROR".red().bold(),
+                        label,
+                        v
+                    );
                     std::process::exit(1);
                 }
             }
@@ -1111,7 +1128,11 @@ fn cmd_huge(
                 *last_note.borrow_mut() = n.clone();
             }
         }
-        let pct = if p.total > 0 { (p.position as f64 / p.total as f64 * 100.0).min(100.0) } else { 0.0 };
+        let pct = if p.total > 0 {
+            (p.position as f64 / p.total as f64 * 100.0).min(100.0)
+        } else {
+            0.0
+        };
         let flag = match p.pressure {
             Pressure::Ok => "",
             Pressure::Low => " [low mem: buffers shrunk]",
@@ -1144,7 +1165,10 @@ fn cmd_huge(
                 eprintln!("{}", "─── Huge-file Report ───".cyan().bold());
                 eprintln!("  Mode            : {}", r.mode);
                 eprintln!("  Input size      : {}", fmt_bytes(r.input_size));
-                eprintln!("  Files recovered : {}", format!("{}", r.files_recovered).green().bold());
+                eprintln!(
+                    "  Files recovered : {}",
+                    format!("{}", r.files_recovered).green().bold()
+                );
                 eprintln!("  Bytes recovered : {}", fmt_bytes(r.bytes_recovered));
                 eprintln!("  Duplicates      : {}", r.duplicates_skipped);
                 eprintln!("  Partial files   : {}", r.partial_files);
@@ -1166,12 +1190,18 @@ fn cmd_huge(
                     r.buffer_shrinks
                 );
                 if r.dedup_table_full {
-                    eprintln!("  {} dedup table filled — later duplicates may be kept", "note:".yellow());
+                    eprintln!(
+                        "  {} dedup table filled — later duplicates may be kept",
+                        "note:".yellow()
+                    );
                 }
                 for n in &r.notes {
                     eprintln!("  {} {}", "note:".yellow(), n);
                 }
-                eprintln!("  Time            : {:.1}s", started.elapsed().as_secs_f64());
+                eprintln!(
+                    "  Time            : {:.1}s",
+                    started.elapsed().as_secs_f64()
+                );
                 eprintln!("{}  Output   → {}", "▸".green().bold(), r.output_dir);
                 eprintln!("{}  Manifest → {}", "▸".green().bold(), r.manifest);
                 eprintln!();

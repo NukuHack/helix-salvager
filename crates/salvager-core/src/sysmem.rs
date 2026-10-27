@@ -164,7 +164,9 @@ impl Governor {
         let auto = (snap.available_ram / 2).clamp(64 * MIB, 8 * GIB);
         let budget = match user_limit {
             // Even an explicit cap may not exceed 80 % of what is free now.
-            Some(l) => l.min((snap.available_ram / 10 * 8).max(64 * MIB)).max(32 * MIB),
+            Some(l) => l
+                .min((snap.available_ram / 10 * 8).max(64 * MIB))
+                .max(32 * MIB),
             None => auto,
         };
         // Peak usage ≈ 2 × buffer (buffer + in-memory file for refinement)

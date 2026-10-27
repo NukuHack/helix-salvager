@@ -1157,7 +1157,8 @@ impl SalvageEngine {
                 let s = &data[off..];
                 if s.len() >= 6 {
                     let sz = u32::from_le_bytes([s[2], s[3], s[4], s[5]]);
-                    sz >= 14 && (sz as usize) <= s.len().saturating_add(extra_tail).saturating_add(1024)
+                    sz >= 14
+                        && (sz as usize) <= s.len().saturating_add(extra_tail).saturating_add(1024)
                 } else {
                     false
                 }
